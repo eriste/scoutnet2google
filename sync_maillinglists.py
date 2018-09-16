@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
+"""Synchronize mailinglists in Scoutnet with Google groups."""
 
-from typing import List, Optional, Union, Any, Dict
+from typing import List, Any
 import argparse
 import configparser
 import json
 import logging
 import re
 import sys
+import os
 import time
 from dataclasses import dataclass, field
-import requests
 import googleapiclient.discovery
 import google.auth.compute_engine
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_installed import google_auth_installed
+from appdirs import AppDirs
+from scoutnet import ScoutnetMailinglistApi, ScoutnetMailinglist, \
+    DEFAULT_CONFIG_SCOUTNET
 
-
-DEFAULT_CONFIG_FILE = 'scoutnet2google.ini'
-
-DEFAULT_CONFIG_SCOUTNET = {
-    'api_endpoint': 'https://www.scoutnet.se/api',
-    'api_id': '',
-    'api_key': '',
-}
+DIRS = AppDirs('Scoutnet2Google', 'scoutnet2google')
+DEFAULT_CONFIG_FILE = os.path.join(DIRS.user_config_dir, 'scoutnet2google.ini')
 
 DEFAULT_CONFIG_GOOGLE = {
     'auth': 'standalone',
@@ -33,29 +30,22 @@ SCOPES = ['https://www.googleapis.com/auth/admin.directory.group']
 API_SERVICE_NAME = 'admin'
 API_VERSION = 'directory_v1'
 
-CLIENT_SECRETS_FILE = "client_secret.json"
-CLIENT_TOKEN_FILE = "client_token.json"
+CLIENT_SECRETS_FILE = os.path.join(DIRS.user_config_dir, "client_secret.json")
+CLIENT_TOKEN_FILE = os.path.join(DIRS.user_config_dir, "client_token.json")
 MAX_RESULTS = 100
 CREATE_NAP = 10
 SCOUTNET_RE_FILTER = '.*\\(Scoutnet\\)$'
 SCOUTNET_TAG = '(Scoutnet)'
 
 EMAIL_REWRITES = [
-    ('^(.+)@googlemail\.com$', '\\1@gmail.com')
+    (r'^(.+)@googlemail\.com$', r'\\1@gmail.com')
 ]
 
 
 @dataclass(frozen=True)
-class ScoutnetMailinglist:
-    id: str
-    title: str = None
-    description: str = None
-    aliases: List[str] = field(default_factory=list)
-    members: List[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
 class GoogleGroup:
+    """Hold information about a Google group."""
+
     address: str
     aliases: List[str] = field(default_factory=list)
     members: List[str] = field(default_factory=list)
@@ -63,76 +53,12 @@ class GoogleGroup:
     description: str = None
 
 
-class Scoutnet(object):
-
-    def __init__(self, api_endpoint: str, api_id: str, api_key: str, domain: str) -> None:
-        self.endpoint = api_endpoint
-        self.session = requests.Session()
-        self.session.auth = (api_id, api_key)
-        self.domain = domain
-        self.logger = logging.getLogger('Scoutnet')
-
-    def customlists(self) -> Any:
-        response = self.session.get('{}/group/customlists'.format(self.endpoint))
-        return response.json()
-
-    def get_list(self, list_data: dict) -> ScoutnetMailinglist:
-        url = list_data.get('link')
-        response = self.session.get(url).json()
-        email_addresses = set()
-        data: Dict[str, Any] = response.get('data')
-        title = list_data.get('title')
-        if len(data) > 0:
-            for (_, member_data) in data.items():
-                if 'email' in member_data:
-                    email = member_data['email']['value']
-                    email_addresses.add(email.lower())
-                else:
-                    email = None
-                self.logger.debug("Adding member %s (%s %s) to list \"%s\"", email,
-                                  member_data['first_name']['value'],
-                                  member_data['last_name']['value'],
-                                  title)
-                if 'extra_emails' in member_data:
-                    extra_emails = json.loads(member_data['extra_emails']['value'])
-                    for extra_mail in extra_emails:
-                        email_addresses.add(extra_mail.lower())
-                        self.logger.debug("Additional address %s for user %s", extra_mail, email)
-        list_aliases = list_data.get('aliases', {})
-        aliases = []
-        if len(list_aliases) > 0:
-            for alias in list(set(list_aliases.values())):
-                if alias.endswith('@' + self.domain):
-                    aliases.append(alias)
-                else:
-                    self.logger.error("Invalid domain in alias: %s", alias)
-        return ScoutnetMailinglist(id=list_data['list_email_key'],
-                                   members=list(email_addresses),
-                                   aliases=aliases,
-                                   title=title,
-                                   description=list_data.get('description'))
-
-    def get_all_lists(self, limit: int = None) -> List[ScoutnetMailinglist]:
-        """Fetch all mailing lists from Scoutnet"""
-        all_lists = []
-        count = 0
-        for (clist, cdata) in self.customlists().items():
-            count += 1
-            mlist = self.get_list(cdata)
-            self.logger.info("Fetched %s: %s (%d members)", mlist.id, mlist.title, len(mlist.members))
-            if len(mlist.aliases) > 0:
-                self.logger.debug("Including %s: %s", mlist.id, mlist.title)
-                all_lists.append(mlist)
-            else:
-                self.logger.debug("Excluding %s: %s", mlist.id, mlist.title)
-            if limit is not None and count >= limit:
-                break
-        return all_lists
-
-
 class GoogleDirectory(object):
+    """Access Google group directory."""
 
-    def __init__(self, service: Any, domain: str, readonly: bool = False) -> None:
+    def __init__(self, service: Any, domain: str,
+                 readonly: bool = False) -> None:
+        """Initialize."""
         self.service = service
         self.domain = domain
         self.readonly = readonly
@@ -141,7 +67,7 @@ class GoogleDirectory(object):
             self.logger = self.logger.getChild('READONLY')
 
     def sync_groups(self, groups: List[GoogleGroup]) -> None:
-        """Syncronize mailing lists with Google"""
+        """Syncronize mailing lists with Google."""
         self.delete_removed_groups(groups)
         for group in groups:
             self.logger.info("Synchronizing group %s", group.address)
@@ -150,6 +76,7 @@ class GoogleDirectory(object):
             self.sync_group_members(group)
 
     def delete_removed_groups(self, groups: List[GoogleGroup]) -> None:
+        """Delete groups that are not in Scoutnet anymore."""
         current_groups = set(self.get_all_groups(SCOUTNET_RE_FILTER))
         old_groups = current_groups - set([group.address for group in groups])
         for group_key in old_groups:
@@ -158,7 +85,7 @@ class GoogleDirectory(object):
                 self.service.groups().delete(groupKey=group_key).execute()
 
     def sync_group_info(self, group: GoogleGroup) -> None:
-        """Update/create group information"""
+        """Update/create group information."""
         group_key = group.address
         group_body = {
             'email': group.address,
@@ -167,11 +94,14 @@ class GoogleDirectory(object):
         }
         try:
             result = self.service.groups().get(groupKey=group_key).execute()
-            if result.get('name') == group.title and result.get('description') == group.description:
+            if result.get('name') == group.title \
+                    and result.get('description') == group.description:
                 self.logger.debug("Group %s up to date", group_key)
             else:
                 if not self.readonly:
-                    result = self.service.groups().update(groupKey=group_key, body=group_body).execute()
+                    result = self.service.groups().update(
+                        groupKey=group_key,
+                        body=group_body).execute()
                 self.logger.info("Group %s updated", group_key)
         except Exception as exc:
             self.logger.debug("Exception: %s", str(exc))
@@ -180,36 +110,46 @@ class GoogleDirectory(object):
             if not self.readonly:
                 group = self.service.groups().insert(body=group_body).execute()
                 try:
-                    group = self.service.groups().get(groupKey=group_key).execute()
+                    group = self.service.groups().get(
+                        groupKey=group_key).execute()
                 except Exception as exc:
                     self.logger.debug("Exception: %s", str(exc))
-                    self.logger.warning("Group %s not found once created, taking a short nap and retry", group_key)
+                    self.logger.warning("Group %s not found once created, "
+                                        "taking a short nap and retry",
+                                        group_key)
                     time.sleep(CREATE_NAP)
-                    group = self.service.groups().get(groupKey=group_key).execute()
+                    group = self.service.groups().get(
+                        groupKey=group_key).execute()
                 self.logger.debug("Google returned group %s", group)
             self.logger.info("Group %s created", group_key)
 
     def sync_group_aliases(self, group: GoogleGroup) -> None:
-        """Update/create group information"""
+        """Update/create group information."""
         group_key = group.address
-        result = self.service.groups().aliases().list(groupKey=group_key).execute()
+        result = self.service.groups().aliases().list(
+            groupKey=group_key).execute()
         if result is not None:
-            current_group_aliases = set(entry['alias'] for entry in result.get('aliases', []))
+            current_group_aliases = set(entry['alias']
+                                        for entry
+                                        in result.get('aliases', []))
         else:
             current_group_aliases = set()
         for alias in set(group.aliases) - current_group_aliases:
             self.logger.info("Adding alias: %s", alias)
             alias_body = {'alias': alias}
             if not self.readonly:
-                result = self.service.groups().aliases().insert(groupKey=group_key, body=alias_body).execute()
+                result = self.service.groups().aliases().insert(
+                    groupKey=group_key, body=alias_body).execute()
                 self.logger.debug("Insert result: %s", result)
         for alias in current_group_aliases - set(group.aliases):
             self.logger.info("Removing alias: %s", alias)
             if not self.readonly:
-                result = self.service.groups().aliases().delete(groupKey=group_key, alias=alias).execute()
+                result = self.service.groups().aliases().delete(
+                    groupKey=group_key, alias=alias).execute()
                 self.logger.debug("Delete result: %s", result)
 
     def sync_group_members(self, group: GoogleGroup) -> None:
+        """Synchronize group members."""
         group_key = group.address
         members = set(group.members)
         current_members = set(self.get_all_members(group_key))
@@ -222,27 +162,37 @@ class GoogleDirectory(object):
             member_body = {'email': member_key}
             try:
                 if not self.readonly:
-                    self.service.members().insert(groupKey=group_key, body=member_body).execute()
-                self.logger.info("Added member %s to group %s", member_key, group_key)
+                    self.service.members().insert(
+                        groupKey=group_key, body=member_body).execute()
+                self.logger.info("Added member %s to group %s",
+                                 member_key, group_key)
             except Exception as exc:
                 self.logger.debug("Exception: %s", str(exc))
-                self.logger.error("Failed to add %s to group %s", member_key, group_key)
+                self.logger.error("Failed to add %s to group %s",
+                                  member_key, group_key)
         for member_key in old_members:
             try:
                 if not self.readonly:
-                    self.service.members().delete(groupKey=group_key, memberKey=member_key).execute()
-                self.logger.info("Removed member %s from group %s", member_key, group_key)
+                    self.service.members().delete(
+                        groupKey=group_key,
+                        memberKey=member_key).execute()
+                self.logger.info("Removed member %s from group %s",
+                                 member_key, group_key)
             except Exception as exc:
                 self.logger.debug("Exception: %s", str(exc))
-                self.logger.error("Failed to delete %s from group %s", member_key, group_key)
+                self.logger.error("Failed to delete %s from group %s",
+                                  member_key, group_key)
 
     def get_all_groups(self, re_filter: str) -> List[str]:
-        """Get all groups matching filter"""
+        """Get all groups matching filter."""
         all_groups: List[str] = []
         token = None
         max_results = MAX_RESULTS
         while True:
-            result = self.service.groups().list(domain=self.domain, pageToken=token, maxResults=max_results).execute()
+            result = self.service.groups().list(
+                domain=self.domain,
+                pageToken=token,
+                maxResults=max_results).execute()
             for group in result.get('groups', []):
                 group_address = group['email']
                 group_name = group['name']
@@ -257,12 +207,15 @@ class GoogleDirectory(object):
         return all_groups
 
     def get_all_members(self, group_key: str) -> List[str]:
-        """Get all members in group"""
+        """Get all members in group."""
         all_members: List[str] = []
         token = None
         max_results = MAX_RESULTS
         while True:
-            result = self.service.members().list(groupKey=group_key, pageToken=token, maxResults=max_results).execute()
+            result = self.service.members().list(
+                groupKey=group_key,
+                pageToken=token,
+                maxResults=max_results).execute()
             for member in result.get('members', []):
                 if 'email' in member:
                     all_members.append(member.get('email').lower())
@@ -272,36 +225,8 @@ class GoogleDirectory(object):
         return all_members
 
 
-def google_auth_installed(secret_file: str, token_file: str, scopes: List[str]) -> Credentials:
-    """Authenticate installed applications with Google"""
-    try:
-        with open(token_file, 'rt') as token_file:
-            token_data = json.load(token_file)
-        credentials = Credentials(
-            None,
-            refresh_token=token_data.get('refresh_token'),
-            token_uri=token_data.get('token_uri'),
-            client_id=token_data.get('client_id'),
-            client_secret=token_data.get('client_secret'),
-        )
-    except Exception as exc:
-        logging.debug("Exception: %s", str(exc))
-        flow = InstalledAppFlow.from_client_secrets_file(secret_file, scopes)
-        credentials = flow.run_console()
-        token_data = {
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-        }
-        with open(token_file, 'wt') as token_file:
-            json.dump(token_data, token_file)
-        logging.info("Credentials saved to %s", token_file)
-    return credentials
-
-
 def mailinglist2groups(mlist: ScoutnetMailinglist) -> List[GoogleGroup]:
-    """Convert Scoutnet mailinglist to Google groups"""
+    """Convert Scoutnet mailinglist to Google groups."""
     groups = []
     members = []
     for address in mlist.aliases:
@@ -317,7 +242,8 @@ def mailinglist2groups(mlist: ScoutnetMailinglist) -> List[GoogleGroup]:
             for (pattern, repl) in EMAIL_REWRITES:
                 rewritten = re.sub(pattern, repl, member)
                 if rewritten != member:
-                    logging.debug("Address %s rewritten to %s", member, rewritten)
+                    logging.debug("Address %s rewritten to %s", member,
+                                  rewritten)
                 members.append(rewritten)
         groups.append(GoogleGroup(address=address,
                                   members=members,
@@ -327,9 +253,9 @@ def mailinglist2groups(mlist: ScoutnetMailinglist) -> List[GoogleGroup]:
 
 
 def main() -> None:
-    """main"""
-
-    parser = argparse.ArgumentParser(description='Convert DNS zonefile to JSON')
+    """main."""
+    parser = argparse.ArgumentParser(
+        description='Synchronize Scoutnet email lists with GSuite groups.')
 
     parser.add_argument('--limit',
                         dest='limit',
@@ -360,12 +286,15 @@ def main() -> None:
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
-        logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
-        logging.getLogger('googleapiclient.discovery').setLevel(logging.WARNING)
+        logging.getLogger('googleapiclient.discovery_cache').setLevel(
+            logging.ERROR)
+        logging.getLogger('googleapiclient.discovery').setLevel(
+            logging.WARNING)
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
-        logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.DEBUG)
+        logging.getLogger('googleapiclient.discovery_cache').setLevel(
+            logging.DEBUG)
         logging.getLogger('googleapiclient.discovery').setLevel(logging.DEBUG)
 
     config = configparser.ConfigParser()
@@ -376,20 +305,25 @@ def main() -> None:
     if not args.skip_google:
         # Authenticate with Google
         if config['google']['auth'] == 'installed':
-            credentials = google_auth_installed(CLIENT_SECRETS_FILE, CLIENT_TOKEN_FILE, SCOPES)
+            credentials = google_auth_installed(CLIENT_SECRETS_FILE,
+                                                CLIENT_TOKEN_FILE, SCOPES)
         elif config['google']['auth'] == 'compute_engine':
             credentials = google.auth.compute_engine.Credentials()
         else:
-            LOGGER.critical("Unknown authentication method")
+            logging.critical("Unknown authentication method")
             sys.exit(-1)
-        service = googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-        directory = GoogleDirectory(service, config['google']['domain'], args.dry_run)
+        service = googleapiclient.discovery.build(API_SERVICE_NAME,
+                                                  API_VERSION,
+                                                  credentials=credentials)
+        directory = GoogleDirectory(service, config['google']['domain'],
+                                    args.dry_run)
 
     # Configure Scoutnet
-    scoutnet = Scoutnet(api_endpoint=config['scoutnet']['api_endpoint'],
-                        api_id=config['scoutnet']['api_id'],
-                        api_key=config['scoutnet']['api_key'],
-                        domain=config['google']['domain'])
+    scoutnet = ScoutnetMailinglistApi(
+        api_endpoint=config['scoutnet']['api_endpoint'],
+        api_id=config['scoutnet']['api_id'],
+        api_key=config['scoutnet']['api_key_groups'],
+        domain=config['google']['domain'])
 
     # Fetch all mailing lists from Scoutnet
     all_lists = scoutnet.get_all_lists(args.limit)
@@ -397,7 +331,8 @@ def main() -> None:
     # Optionally output all groups to file
     if args.output:
         with open(args.output, 'wt') as file:
-            file.write(json.dumps([x.__dict__ for x in all_lists], sort_keys=True, indent=4))
+            file.write(json.dumps([x.__dict__ for x in all_lists],
+                                  sort_keys=True, indent=4))
 
     # Convert Scoutnet mailinglists to Google groups
     all_groups = []
@@ -406,6 +341,7 @@ def main() -> None:
 
     # Syncronize with Google Directory
     if not args.skip_google:
+        # noinspection PyUnboundLocalVariable
         directory.sync_groups(all_groups)
 
 

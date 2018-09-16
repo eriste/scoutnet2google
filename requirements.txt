@@ -2,3 +2,4 @@ dataclasses
 google-api-python-client
 google_auth_oauthlib
 requests
+appdirs
