@@ -151,7 +151,8 @@ class GoogleDirectory(object):
     def sync_group_members(self, group: GoogleGroup) -> None:
         """Synchronize group members."""
         group_key = group.address
-        members = set(group.members)
+        members = set([re.sub(r'\+[^@]+', '', member)
+                       for member in group.members])  # remove + notation
         current_members = set(self.get_all_members(group_key))
         new_members = members - current_members
         old_members = current_members - members
@@ -314,7 +315,8 @@ def main() -> None:
             sys.exit(-1)
         service = googleapiclient.discovery.build(API_SERVICE_NAME,
                                                   API_VERSION,
-                                                  credentials=credentials)
+                                                  credentials=credentials,
+                                                  cache_discovery=False)
         directory = GoogleDirectory(service, config['google']['domain'],
                                     args.dry_run)
 

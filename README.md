@@ -31,11 +31,11 @@ finns konfigurerade i Scoutnet.
 
 ### E-postlistor
 
-1. Gå till kårens sida i Scoutnet.
+1. Gå till kårens sida i Scoutnet och välj fliken Epostlistor.
 2. Välj *"Skapa en ny lista..."*
-3. Fyll i namn och beskrivning. Namn bör motsvara första 
-   delen av den blivande e-postadressen, tex "utmanare" om 
-   man vill ha adressen "utmanare@exempel.com".
+3. Fyll i namn och beskrivning, tex "Medlemmar utmanare". Ange det
+   e-postadress som listan skall få som ett alias (tex 
+   "utmanare@exempel.com"). Glöm inte att klicka "Lägg till".
 4. Tryck på "Spara..."
 5. I steget "Skapa en ny maillisteregel" anger man namn och 
    beskrivning på den regel som gör urvalet till listan. 
@@ -86,6 +86,7 @@ Filen heter scoutnet2google.ini och ser som exemplet nedan:
 api_id: 1234
 api_key_groups: mekmitasdigoat
 api_key_users: mekmitasdigoat
+youthgroup_with_accounts:
 
 [google]
 auth: installed
@@ -101,6 +102,9 @@ domain: example.com
   som genererats i Scoutnet anges.
 * api_key_users: här skall API-nyckeln för användare som 
   genererats i Scoutnet anges.
+* youthgroup_with_accounts: här skriver man en kommaseparerad
+  lista över avdelningar där även medlemmar under 18 år skall
+  ha konton i Google-system (tex Utmanare)
 * domain: här anger man kårens domän-namn som används i 
   Google (dvs har man epost-adresser ledare@superscout.se 
   så skall det stå superscout.se här).
