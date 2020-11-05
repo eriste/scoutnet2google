@@ -1,23 +1,14 @@
 """Check that only Scoutnet users exist in Google."""
 from typing import List, Any
 import argparse
-import configure
 import logging
 import os
 from dataclasses import dataclass
 import googleapiclient.discovery
 import google.auth.compute_engine
 from google_auth_installed import google_auth_installed
-from appdirs import AppDirs
-from scoutnet import ScoutnetUsersApi, DEFAULT_CONFIG_SCOUTNET
-
-DIRS = AppDirs('Scoutnet2Google', 'scoutnet2google')
-DEFAULT_CONFIG_FILE = os.path.join(DIRS.user_config_dir, 'scoutnet2google.ini')
-
-DEFAULT_CONFIG_GOOGLE = {
-    'auth': 'standalone',
-    'domain': '',
-}
+from scoutnet import ScoutnetUsersApi
+import manage_config
 
 SCOPES = ['https://www.googleapis.com/auth/admin.directory.user',
           'https://www.googleapis.com/auth/admin.directory.user.readonly'
@@ -25,9 +16,9 @@ SCOPES = ['https://www.googleapis.com/auth/admin.directory.user',
 API_SERVICE_NAME = 'admin'
 API_VERSION = 'directory_v1'
 
-CLIENT_SECRETS_FILE = os.path.join(DIRS.user_config_dir,
+CLIENT_SECRETS_FILE = os.path.join(manage_config.DIRS.user_config_dir,
                                    "client_secret_%s.json" % 'check_users')
-CLIENT_TOKEN_FILE = os.path.join(DIRS.user_config_dir,
+CLIENT_TOKEN_FILE = os.path.join(manage_config.DIRS.user_config_dir,
                                  "client_token_%s.json" % 'check_users')
 
 
@@ -150,12 +141,7 @@ def main() -> None:
             logging.DEBUG)
         logging.getLogger('googleapiclient.discovery').setLevel(logging.DEBUG)
 
-    # Config
-    logging.info('Using config file: %s', DEFAULT_CONFIG_FILE)
-    config = configure.S2g_config()
-    config['scoutnet'] = DEFAULT_CONFIG_SCOUTNET
-    config['google'] = DEFAULT_CONFIG_GOOGLE
-    config.read(DEFAULT_CONFIG_FILE)
+    config = manage_config.S2g_config()
 
     # Authenticate with Google
     assert config['google']['auth'] in ['installed', 'compute_engine'], \

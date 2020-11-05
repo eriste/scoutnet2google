@@ -15,11 +15,10 @@ import googleapiclient.discovery
 import google.auth.compute_engine
 from google_auth_installed import google_auth_installed
 from appdirs import AppDirs
-from scoutnet import ScoutnetMailinglistApi, ScoutnetMailinglist, \
-    DEFAULT_CONFIG_SCOUTNET
+from scoutnet import ScoutnetMailinglistApi, ScoutnetMailinglist
+from manage_config import S2g_config
 
 DIRS = AppDirs('Scoutnet2Google', 'scoutnet2google')
-DEFAULT_CONFIG_FILE = os.path.join(DIRS.user_config_dir, 'scoutnet2google.ini')
 
 DEFAULT_CONFIG_GOOGLE = {
     'auth': 'standalone',
@@ -298,10 +297,7 @@ def main() -> None:
             logging.DEBUG)
         logging.getLogger('googleapiclient.discovery').setLevel(logging.DEBUG)
 
-    config = configparser.ConfigParser()
-    config['scoutnet'] = DEFAULT_CONFIG_SCOUTNET
-    config['google'] = DEFAULT_CONFIG_GOOGLE
-    config.read(DEFAULT_CONFIG_FILE)
+    config = S2g_config()
 
     if not args.skip_google:
         # Authenticate with Google
